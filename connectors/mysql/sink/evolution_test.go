@@ -3,6 +3,7 @@ package mysql
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -20,12 +21,63 @@ func driftModel() rowmodel.Schema {
 	return rowmodel.Schema{Resource: "items", Fields: []rowmodel.Field{{Name: "id", Logical: rowmodel.LogicalInt64}, {Name: "name", Logical: rowmodel.LogicalString, Nullable: true}}, PrimaryKey: []string{"id"}}
 }
 
+// scratchDSN returns the isolated MySQL server named by env. Locally, a missing value
+// skips the test. Under CI (CI=true) it fails, so a service container that did not
+// start cannot turn this coverage into a silent pass.
+func scratchDSN(t testing.TB, env string) string {
+	t.Helper()
+	if dsn := os.Getenv(env); dsn != "" {
+		return dsn
+	}
+	if os.Getenv("CI") == "true" {
+		t.Fatalf("%s is not set; CI must provide an isolated MySQL server", env)
+		return ""
+	}
+	t.Skipf("set %s to an isolated MySQL server", env)
+	return ""
+}
+
+// dsnRecorder captures what scratchDSN reports without ending the test, so both the
+// fail and skip branches can be asserted in one run.
+type dsnRecorder struct {
+	testing.TB
+	fatal, skip string
+}
+
+func (r *dsnRecorder) Helper() {}
+
+func (r *dsnRecorder) Fatalf(format string, args ...any) { r.fatal = fmt.Sprintf(format, args...) }
+
+func (r *dsnRecorder) Skipf(format string, args ...any) { r.skip = fmt.Sprintf(format, args...) }
+
+func TestScratchDSN(t *testing.T) {
+	const env = "FILAMENT_TEST_MYSQL_DSN"
+	for _, tc := range []struct {
+		name, ci, dsn, want string
+		fatal, skip         bool
+	}{
+		{name: "configured", dsn: "mysql://scratch", want: "mysql://scratch"},
+		{name: "configured in CI", ci: "true", dsn: "mysql://scratch", want: "mysql://scratch"},
+		{name: "missing skips locally", skip: true},
+		{name: "missing fails in CI", ci: "true", fatal: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CI", tc.ci)
+			t.Setenv(env, tc.dsn)
+			r := &dsnRecorder{TB: t}
+			if got := scratchDSN(r, env); got != tc.want {
+				t.Fatalf("scratchDSN() = %q, want %q", got, tc.want)
+			}
+			if (r.fatal != "") != tc.fatal || (r.skip != "") != tc.skip {
+				t.Fatalf("fatal=%q skip=%q, want fatal=%v skip=%v", r.fatal, r.skip, tc.fatal, tc.skip)
+			}
+		})
+	}
+}
+
 func driftSink(t *testing.T, policy string, mode filament.IngestionType) (context.Context, *Sink, filament.RunSpec) {
 	t.Helper()
-	dsn := os.Getenv("FILAMENT_TEST_MYSQL_DSN")
-	if dsn == "" {
-		t.Skip("set FILAMENT_TEST_MYSQL_DSN to an isolated MySQL server")
-	}
+	dsn := scratchDSN(t, "FILAMENT_TEST_MYSQL_DSN")
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	t.Cleanup(cancel)
 	spec := filament.RunSpec{Run: "run", Resources: []string{"items"}, Sink: filament.Ref{Config: map[string]any{"dsn": dsn, "database": "drift_" + uuid.NewString()[:8], "schema_evolution": policy}}, WritePolicies: map[string]filament.WritePolicy{"items": {Capability: filament.WriteCapabilities(mode)[0]}}}

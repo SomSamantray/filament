@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -53,12 +54,63 @@ func TestPhysicalSchema(t *testing.T) {
 	}
 }
 
+// scratchDSN returns the scratch database named by env. Locally, a missing value skips
+// the test. Under CI (CI=true) it fails, so a service container that did not start
+// cannot turn this coverage into a silent pass.
+func scratchDSN(t testing.TB, env string) string {
+	t.Helper()
+	if dsn := os.Getenv(env); dsn != "" {
+		return dsn
+	}
+	if os.Getenv("CI") == "true" {
+		t.Fatalf("%s is not set; CI must provide a scratch database", env)
+		return ""
+	}
+	t.Skipf("set %s to a scratch database", env)
+	return ""
+}
+
+// dsnRecorder captures what scratchDSN reports without ending the test, so both the
+// fail and skip branches can be asserted in one run.
+type dsnRecorder struct {
+	testing.TB
+	fatal, skip string
+}
+
+func (r *dsnRecorder) Helper() {}
+
+func (r *dsnRecorder) Fatalf(format string, args ...any) { r.fatal = fmt.Sprintf(format, args...) }
+
+func (r *dsnRecorder) Skipf(format string, args ...any) { r.skip = fmt.Sprintf(format, args...) }
+
+func TestScratchDSN(t *testing.T) {
+	const env = "FILAMENT_TEST_POSTGRES_DSN"
+	for _, tc := range []struct {
+		name, ci, dsn, want string
+		fatal, skip         bool
+	}{
+		{name: "configured", dsn: "postgres://scratch", want: "postgres://scratch"},
+		{name: "configured in CI", ci: "true", dsn: "postgres://scratch", want: "postgres://scratch"},
+		{name: "missing skips locally", skip: true},
+		{name: "missing fails in CI", ci: "true", fatal: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CI", tc.ci)
+			t.Setenv(env, tc.dsn)
+			r := &dsnRecorder{TB: t}
+			if got := scratchDSN(r, env); got != tc.want {
+				t.Fatalf("scratchDSN() = %q, want %q", got, tc.want)
+			}
+			if (r.fatal != "") != tc.fatal || (r.skip != "") != tc.skip {
+				t.Fatalf("fatal=%q skip=%q, want fatal=%v skip=%v", r.fatal, r.skip, tc.fatal, tc.skip)
+			}
+		})
+	}
+}
+
 func driftSink(t *testing.T, policy string, ingestion filament.IngestionType, continuous bool) (context.Context, *Sink, filament.RunSpec) {
 	t.Helper()
-	dsn := os.Getenv("FILAMENT_TEST_POSTGRES_DSN")
-	if dsn == "" {
-		t.Skip("set FILAMENT_TEST_POSTGRES_DSN to a scratch database")
-	}
+	dsn := scratchDSN(t, "FILAMENT_TEST_POSTGRES_DSN")
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	t.Cleanup(cancel)
 	namespace := "drift_" + uuid.NewString()[:8]
