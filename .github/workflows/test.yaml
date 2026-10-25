@@ -78,6 +78,11 @@ jobs:
 
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
 
+      - name: Allow LOAD DATA on the MySQL service
+        run: |
+          id=$(docker ps --format '{{.ID}} {{.Image}}' | awk '/mysql/ {print $1; exit}')
+          docker exec -e MYSQL_PWD=filament-test "$id" mysql -uroot -e "SET GLOBAL local_infile = ON"
+
       - name: Test
         run: just test
 
