@@ -54,9 +54,6 @@ func TestPhysicalSchema(t *testing.T) {
 	}
 }
 
-// scratchDSN returns the scratch database named by env. Locally, a missing value skips
-// the test. Under CI (CI=true) it fails, so a service container that did not start
-// cannot turn this coverage into a silent pass.
 func scratchDSN(t testing.TB, env string) string {
 	t.Helper()
 	if dsn := os.Getenv(env); dsn != "" {
@@ -70,8 +67,6 @@ func scratchDSN(t testing.TB, env string) string {
 	return ""
 }
 
-// dsnRecorder captures what scratchDSN reports without ending the test, so both the
-// fail and skip branches can be asserted in one run.
 type dsnRecorder struct {
 	testing.TB
 	fatal, skip string
